@@ -220,3 +220,12 @@ Race-Car-Monitoring-System/
 ---
 
 *Developed as an embedded systems project exploring automotive safety monitoring, sensor integration, and real-time data visualization.*
+
+
+## 📸 Project Demonstration
+
+### Circuit Diagram
+![Circuit Diagram](ESP32%20Race%20Car%20Monitoring%20Circuit.png)
+
+### Wokwi Simulation
+![Simulation](Simulation.jpg)
