@@ -1,0 +1,480 @@
+
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <math.h>
+
+// ========================================
+// 1. PIN CONFIGURATION
+// ========================================
+
+// HC-SR04
+#define TRIG_PIN 5
+#define ECHO_PIN 16
+
+// LEDs
+#define RED_LED 23
+#define YELLOW_LED 19
+#define GREEN_LED 17
+
+// Brake potentiometer
+#define BRAKE_PIN 34
+
+// I2C
+#define SDA_PIN 21
+#define SCL_PIN 22
+
+// ========================================
+// 2. OLED CONFIGURATION
+// ========================================
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+
+Adafruit_SSD1306 display(
+  SCREEN_WIDTH,
+  SCREEN_HEIGHT,
+  &Wire,
+  OLED_RESET
+);
+
+// ========================================
+// 3. MPU6050
+// ========================================
+
+Adafruit_MPU6050 mpu;
+
+// ========================================
+// 4. THRESHOLDS
+// ========================================
+
+const float NORMAL_LIMIT = 5.0;
+const float CRITICAL_LIMIT = 45.0;
+
+const float COLLISION_LIMIT = 15.0;
+
+const unsigned long BLINK_INTERVAL = 250;
+
+// ========================================
+// 5. SENSOR VARIABLES
+// ========================================
+
+// All three are GYROSCOPE rotation rates
+float rotationX = 0;
+float rotationY = 0;
+float rotationZ = 0;
+
+float distanceCM = -1;
+
+int brakePressure = 0;
+
+bool obstacleDetected = false;
+bool criticalRotation = false;
+
+bool blinkState = false;
+
+// ========================================
+// 6. TIMERS
+// ========================================
+
+unsigned long previousBlink = 0;
+unsigned long previousDistance = 0;
+unsigned long previousDisplay = 0;
+
+// ========================================
+// 7. READ MPU6050 GYROSCOPE
+// ========================================
+
+void readMPU() {
+
+  sensors_event_t accel;
+  sensors_event_t gyro;
+  sensors_event_t temp;
+
+  mpu.getEvent(&accel, &gyro, &temp);
+
+  // IMPORTANT:
+  // Use GYROSCOPE readings, NOT acceleration.
+
+  rotationX = gyro.gyro.x * 180.0 / PI;
+
+  rotationY = gyro.gyro.y * 180.0 / PI;
+
+  rotationZ = gyro.gyro.z * 180.0 / PI;
+}
+
+// ========================================
+// 8. RED LED - X ROTATION
+// ========================================
+
+void controlRedLED() {
+
+  float value = fabs(rotationX);
+
+  if (value > NORMAL_LIMIT && value <= CRITICAL_LIMIT) {
+    digitalWrite(RED_LED, HIGH);
+  }
+  else {
+    digitalWrite(RED_LED, LOW);
+  }
+}
+
+// ========================================
+// 9. YELLOW LED - Y ROTATION
+// ========================================
+
+void controlYellowLED() {
+
+  float value = fabs(rotationY);
+
+  if (value > NORMAL_LIMIT && value <= CRITICAL_LIMIT) {
+    digitalWrite(YELLOW_LED, HIGH);
+  }
+  else {
+    digitalWrite(YELLOW_LED, LOW);
+  }
+}
+
+// ========================================
+// 10. GREEN LED - Z ROTATION
+// ========================================
+
+void controlGreenLED() {
+
+  float value = fabs(rotationZ);
+
+  if (value > NORMAL_LIMIT && value <= CRITICAL_LIMIT) {
+    digitalWrite(GREEN_LED, HIGH);
+  }
+  else {
+    digitalWrite(GREEN_LED, LOW);
+  }
+}
+
+// ========================================
+// 11. BRAKE PRESSURE
+// ========================================
+
+void readBrake() {
+
+  int rawValue = analogRead(BRAKE_PIN);
+
+  brakePressure = map(
+    rawValue,
+    0,
+    4095,
+    0,
+    100
+  );
+
+  brakePressure = constrain(
+    brakePressure,
+    0,
+    100
+  );
+}
+
+// ========================================
+// 12. ULTRASONIC DISTANCE
+// ========================================
+
+float readDistance() {
+
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(
+    ECHO_PIN,
+    HIGH,
+    25000
+  );
+
+  if (duration == 0) {
+    return -1;
+  }
+
+  return duration * 0.0343 / 2.0;
+}
+
+// ========================================
+// 13. COLLISION DETECTION
+// ========================================
+
+void checkCollision() {
+
+  distanceCM = readDistance();
+
+  obstacleDetected =
+    (distanceCM >= 0 &&
+     distanceCM <= COLLISION_LIMIT);
+}
+
+// ========================================
+// 14. COMPLETE LED CONTROL
+// ========================================
+
+void updateLEDs() {
+
+  // Check all three gyroscope axes
+
+  bool criticalX =
+    fabs(rotationX) > CRITICAL_LIMIT;
+
+  bool criticalY =
+    fabs(rotationY) > CRITICAL_LIMIT;
+
+  bool criticalZ =
+    fabs(rotationZ) > CRITICAL_LIMIT;
+
+  criticalRotation =
+    criticalX || criticalY || criticalZ;
+
+  // EMERGENCY MODE
+  // Any axis above 45 or collision
+  // All LEDs blink together
+
+  if (obstacleDetected || criticalRotation) {
+
+    if (millis() - previousBlink >= BLINK_INTERVAL) {
+
+      previousBlink = millis();
+
+      blinkState = !blinkState;
+    }
+
+    digitalWrite(RED_LED, blinkState);
+    digitalWrite(YELLOW_LED, blinkState);
+    digitalWrite(GREEN_LED, blinkState);
+
+    return;
+  }
+
+  // NORMAL MODE
+  // Independent rotation-based LED control
+
+  controlRedLED();
+
+  controlYellowLED();
+
+  controlGreenLED();
+}
+
+// ========================================
+// 15. OLED DASHBOARD
+// ========================================
+
+void updateDashboard() {
+
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(0, 0);
+  display.println("RACE CAR DASHBOARD");
+
+  display.drawLine(
+    0, 10, 127, 10,
+    SSD1306_WHITE
+  );
+
+  // X rotation
+  display.setCursor(0, 13);
+  display.print("X: ");
+  display.print(rotationX, 1);
+  display.print(" d/s");
+
+  // Y rotation
+  display.setCursor(68, 13);
+  display.print("Y: ");
+  display.print(rotationY, 1);
+  display.print(" d/s");
+
+  // Z rotation
+  display.setCursor(0, 24);
+  display.print("Z: ");
+  display.print(rotationZ, 1);
+  display.println(" d/s");
+
+  // Brake pressure
+  display.setCursor(0, 35);
+  display.print("BRAKE: ");
+  display.print(brakePressure);
+  display.println("%");
+
+  // Distance
+  display.setCursor(0, 46);
+  display.print("DIST: ");
+
+  if (distanceCM < 0) {
+    display.print("--");
+  }
+  else {
+    display.print(distanceCM, 1);
+  }
+
+  display.println(" cm");
+
+  // System status
+  display.setCursor(0, 56);
+
+  if (obstacleDetected) {
+    display.print("COLLISION WARNING!");
+  }
+  else if (criticalRotation) {
+    display.print("CRITICAL ROTATION!");
+  }
+  else {
+    display.print("STATUS: NORMAL");
+  }
+
+  display.display();
+}
+
+// ========================================
+// 16. SETUP
+// ========================================
+
+void setup() {
+
+  Serial.begin(115200);
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  pinMode(RED_LED, OUTPUT);
+  pinMode(YELLOW_LED, OUTPUT);
+  pinMode(GREEN_LED, OUTPUT);
+
+  pinMode(BRAKE_PIN, INPUT);
+
+  digitalWrite(RED_LED, LOW);
+  digitalWrite(YELLOW_LED, LOW);
+  digitalWrite(GREEN_LED, LOW);
+
+  analogReadResolution(12);
+
+  // Initialize I2C
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  // Initialize OLED
+  if (!display.begin(
+    SSD1306_SWITCHCAPVCC,
+    0x3C
+  )) {
+
+    Serial.println("OLED ERROR!");
+
+    while (true) {
+      delay(100);
+    }
+  }
+
+  display.clearDisplay();
+
+  display.setCursor(0, 20);
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.println("RACE CAR MONITOR");
+  display.println("Initializing...");
+
+  display.display();
+
+  // Initialize MPU6050
+  if (!mpu.begin(0x68, &Wire)) {
+
+    Serial.println("MPU6050 ERROR!");
+
+    display.clearDisplay();
+    display.setCursor(0, 20);
+    display.println("MPU6050 ERROR!");
+    display.display();
+
+    while (true) {
+      delay(100);
+    }
+  }
+
+  mpu.setAccelerometerRange(
+    MPU6050_RANGE_4_G
+  );
+
+  mpu.setGyroRange(
+    MPU6050_RANGE_500_DEG
+  );
+
+  mpu.setFilterBandwidth(
+    MPU6050_BAND_21_HZ
+  );
+
+  delay(500);
+
+  Serial.println("============================");
+  Serial.println("RACE CAR MONITOR READY");
+  Serial.println("X = Red LED");
+  Serial.println("Y = Yellow LED");
+  Serial.println("Z = Green LED");
+  Serial.println("============================");
+}
+
+// ========================================
+// 17. MAIN LOOP
+// ========================================
+
+void loop() {
+
+  // Read gyroscope
+  readMPU();
+
+  // Read brake
+  readBrake();
+
+  // Distance measurement every 60 ms
+  if (millis() - previousDistance >= 60) {
+
+    previousDistance = millis();
+
+    checkCollision();
+  }
+
+  // Update LEDs
+  updateLEDs();
+
+  // OLED refresh every 150 ms
+  if (millis() - previousDisplay >= 150) {
+
+    previousDisplay = millis();
+
+    updateDashboard();
+
+    // Serial Monitor
+    Serial.print("X Rotation: ");
+    Serial.print(rotationX, 2);
+
+    Serial.print(" | Y Rotation: ");
+    Serial.print(rotationY, 2);
+
+    Serial.print(" | Z Rotation: ");
+    Serial.print(rotationZ, 2);
+
+    Serial.print(" | Brake: ");
+    Serial.print(brakePressure);
+
+    Serial.print("% | Distance: ");
+    Serial.print(distanceCM);
+
+    Serial.print(" cm | Critical: ");
+    Serial.println(criticalRotation);
+  }
+
+  delay(10);
+}
